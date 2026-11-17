@@ -1,0 +1,249 @@
+{
+  "entities": {
+    "Company": {
+      "title": "Company",
+      "description": "Company profile and QR format configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "description": "Numeric company identifier (1 or 2)" },
+        "code": { "type": "string", "minLength": 2, "maxLength": 64, "description": "Company code" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120, "description": "Company display name" },
+        "qr_profile": { "type": "string", "minLength": 2, "maxLength": 64, "description": "Active QR parser profile" },
+        "description": { "type": "string", "maxLength": 500, "description": "QR parsing rule summary" }
+      },
+      "required": ["id", "code", "name", "qr_profile", "description"]
+    },
+    "SystemBootstrap": {
+      "title": "SystemBootstrap",
+      "description": "One-time initialization lock marking that the initial system administrator has been configured",
+      "type": "object",
+      "properties": {
+        "initialized": { "type": "boolean", "description": "Must be true once initialized" },
+        "adminUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Initial admin Firebase Auth UID" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp when system admin was initialized" }
+      },
+      "required": ["initialized", "adminUid", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated warehouse operator, supervisor, or admin profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Firebase Auth UID" },
+        "username": { "type": "string", "minLength": 2, "maxLength": 120, "description": "System username or login handle" },
+        "full_name": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Operator display name" },
+        "role": { "type": "string", "enum": ["admin", "supervisor", "operator"], "description": "RBAC warehouse role" },
+        "active": { "type": "integer", "description": "Account status flag (1 active, 0 disabled)" },
+        "created_at": { "type": "string", "maxLength": 64, "description": "ISO timestamp of registration" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Admin UID that provisioned this user" },
+        "serverCreatedAt": { "type": "string", "format": "date-time", "description": "Firestore server creation timestamp" }
+      },
+      "required": ["uid", "username", "full_name", "role", "active", "created_at", "createdByUid", "serverCreatedAt"]
+    },
+    "AdminMarker": {
+      "title": "AdminMarker",
+      "description": "Server-verified administrator role marker keyed by Firebase Auth UID",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Admin UID" },
+        "email": { "type": "string", "maxLength": 160, "description": "Admin auth identifier" },
+        "grantedAt": { "type": "string", "format": "date-time", "description": "Timestamp admin access was granted" }
+      },
+      "required": ["uid", "email", "grantedAt"]
+    },
+    "Container": {
+      "title": "Container",
+      "description": "Completed inbound receiving container manifest",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "description": "Unique numeric container ID" },
+        "company_id": { "type": "integer", "description": "Owning company ID (1 or 2)" },
+        "container_code": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Container or manifest code" },
+        "pallet_ref": { "type": "string", "maxLength": 120, "description": "Pallet reference" },
+        "location": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Receiving dock or bin summary" },
+        "total_boxes": { "type": "integer", "description": "Box count in container" },
+        "total_units": { "type": "integer", "description": "Total units in container" },
+        "received_by": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Operator display handle" },
+        "completed_at": { "type": "string", "maxLength": 64, "description": "ISO completion timestamp" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Creator Firebase Auth UID" },
+        "serverCreatedAt": { "type": "string", "format": "date-time", "description": "Firestore server timestamp" }
+      },
+      "required": ["id", "company_id", "container_code", "pallet_ref", "location", "total_boxes", "total_units", "received_by", "completed_at", "createdByUid", "serverCreatedAt"]
+    },
+    "InventoryLot": {
+      "title": "InventoryLot",
+      "description": "Box-level FIFO inventory lot tracked per company and bin location",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "description": "Unique numeric lot ID" },
+        "company_id": { "type": "integer", "description": "Owning company ID (1 or 2)" },
+        "part_number": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Part SKU" },
+        "qty": { "type": "integer", "description": "Current on-hand quantity (>= 0)" },
+        "initial_qty": { "type": "integer", "description": "Original received quantity (> 0)" },
+        "box_id": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Box or pallet line ID" },
+        "batch_ref": { "type": "string", "maxLength": 120, "description": "Batch reference" },
+        "location": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Current warehouse bin/location" },
+        "container_id": { "type": "integer", "description": "Parent container numeric ID" },
+        "container_code": { "type": "string", "maxLength": 120, "description": "Parent container code" },
+        "pallet_ref": { "type": "string", "maxLength": 120, "description": "Pallet reference" },
+        "received_at": { "type": "string", "maxLength": 64, "description": "ISO receipt timestamp used for FIFO order" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Creator Firebase Auth UID" },
+        "serverCreatedAt": { "type": "string", "format": "date-time", "description": "Firestore server creation timestamp" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time", "description": "Firestore server last-update timestamp" }
+      },
+      "required": ["id", "company_id", "part_number", "qty", "initial_qty", "box_id", "batch_ref", "location", "container_id", "container_code", "pallet_ref", "received_at", "createdByUid", "serverCreatedAt"]
+    },
+    "Movement": {
+      "title": "Movement",
+      "description": "Immutable warehouse audit ledger record (RECEIVE, OUTBOUND_FIFO, TRANSFER)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "description": "Unique numeric movement ID" },
+        "company_id": { "type": "integer", "description": "Owning company ID (1 or 2)" },
+        "movement_type": { "type": "string", "enum": ["RECEIVE", "OUTBOUND_FIFO", "TRANSFER"], "description": "Movement type" },
+        "part_number": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Part number" },
+        "qty_delta": { "type": "integer", "description": "Signed quantity delta" },
+        "box_id": { "type": "string", "maxLength": 120, "description": "Box ID" },
+        "batch_ref": { "type": "string", "maxLength": 120, "description": "Batch reference" },
+        "from_location": { "type": "string", "maxLength": 120, "description": "Source location" },
+        "to_location": { "type": "string", "maxLength": 120, "description": "Destination location" },
+        "reference_code": { "type": "string", "maxLength": 120, "description": "Container, SO, or transfer order ref" },
+        "lot_id": { "type": "integer", "description": "Associated inventory lot ID" },
+        "performed_by": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Operator display handle" },
+        "created_at": { "type": "string", "maxLength": 64, "description": "ISO movement timestamp" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Creator Firebase Auth UID" },
+        "serverCreatedAt": { "type": "string", "format": "date-time", "description": "Firestore server timestamp" }
+      },
+      "required": ["id", "company_id", "movement_type", "part_number", "qty_delta", "box_id", "batch_ref", "from_location", "to_location", "reference_code", "lot_id", "performed_by", "created_at", "createdByUid", "serverCreatedAt"]
+    },
+    "Bom": {
+      "title": "Bom",
+      "description": "Bill of Materials header record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "description": "Unique numeric BOM ID" },
+        "company_id": { "type": "integer", "description": "Owning company ID (1 or 2)" },
+        "parent_part": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Parent assembly part number" },
+        "description": { "type": "string", "maxLength": 300, "description": "Assembly description" },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 32, "description": "BOM revision code" },
+        "created_by": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Author username" },
+        "updated_at": { "type": "string", "maxLength": 64, "description": "ISO update timestamp" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Creator Firebase Auth UID" },
+        "serverCreatedAt": { "type": "string", "format": "date-time", "description": "Firestore server creation timestamp" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time", "description": "Firestore server update timestamp" }
+      },
+      "required": ["id", "company_id", "parent_part", "description", "revision", "created_by", "updated_at", "createdByUid", "serverCreatedAt"]
+    },
+    "BomItem": {
+      "title": "BomItem",
+      "description": "Bill of Materials component line item stored in BOM subcollection",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "description": "Unique numeric line ID" },
+        "bom_id": { "type": "integer", "description": "Parent BOM numeric ID" },
+        "company_id": { "type": "integer", "description": "Owning company ID (1 or 2)" },
+        "component_part": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Component SKU" },
+        "qty_per_assembly": { "type": "integer", "description": "Required units per assembly (> 0)" },
+        "notes": { "type": "string", "maxLength": 250, "description": "Optional assembly notes" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Creator Firebase Auth UID" }
+      },
+      "required": ["id", "bom_id", "company_id", "component_part", "qty_per_assembly", "notes", "createdByUid"]
+    },
+    "UploadedFile": {
+      "title": "UploadedFile",
+      "description": "Metadata header for an uploaded Excel or CSV master packing list",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "description": "Unique numeric file ID" },
+        "company_id": { "type": "integer", "description": "Owning company ID (1 or 2)" },
+        "file_name": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Original filename" },
+        "row_count": { "type": "integer", "description": "Number of parsed rows" },
+        "uploaded_by": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Uploader handle" },
+        "uploaded_at": { "type": "string", "maxLength": 64, "description": "ISO upload timestamp" },
+        "store_group": { "type": "string", "enum": ["B01", "SAIC", "M81", "EC15S", ""], "description": "Store file grouping (B01, SAIC, M81, EC15S)" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Creator Firebase Auth UID" },
+        "serverCreatedAt": { "type": "string", "format": "date-time", "description": "Firestore server timestamp" }
+      },
+      "required": ["id", "company_id", "file_name", "row_count", "uploaded_by", "uploaded_at", "createdByUid", "serverCreatedAt"]
+    },
+    "UploadedFileRow": {
+      "title": "UploadedFileRow",
+      "description": "Parsed row inside an uploaded packing list subcollection",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer", "description": "Unique numeric row ID" },
+        "file_id": { "type": "integer", "description": "Parent file ID" },
+        "company_id": { "type": "integer", "description": "Owning company ID (1 or 2)" },
+        "lookup_key": { "type": "string", "minLength": 1, "maxLength": 160, "description": "Column A lookup or pallet key" },
+        "part_name": { "type": "string", "maxLength": 200, "description": "Column B part name" },
+        "part_number": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Column C part number" },
+        "qty": { "type": "integer", "description": "Column D positive integer quantity" },
+        "batch_ref": { "type": "string", "maxLength": 120, "description": "Column E batch reference" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Creator Firebase Auth UID" }
+      },
+      "required": ["id", "file_id", "company_id", "lookup_key", "part_name", "part_number", "qty", "batch_ref", "createdByUid"]
+    },
+    "StoreGroup": {
+      "title": "StoreGroup",
+      "description": "Custom store file group defined by warehouse admin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Group ID code" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 32, "description": "Group display name" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$", "description": "Admin UID" },
+        "serverCreatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": ["id", "name", "createdByUid", "serverCreatedAt"]
+    }
+  },
+  "firestore": {
+    "/system/bootstrap": {
+      "schema": { "$ref": "#/entities/SystemBootstrap" },
+      "description": "One-time bootstrap lock document preventing unauthorized admin initialization"
+    },
+    "/companies/{companyId}": {
+      "schema": { "$ref": "#/entities/Company" },
+      "description": "Company definitions (IDs 1 and 2)"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profiles keyed by Firebase Auth UID"
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMarker" },
+      "description": "Administrator marker documents keyed by Firebase Auth UID"
+    },
+    "/containers/{containerId}": {
+      "schema": { "$ref": "#/entities/Container" },
+      "description": "Completed inbound containers"
+    },
+    "/inventory_lots/{lotId}": {
+      "schema": { "$ref": "#/entities/InventoryLot" },
+      "description": "Company-isolated FIFO inventory lots"
+    },
+    "/movements/{movementId}": {
+      "schema": { "$ref": "#/entities/Movement" },
+      "description": "Append-only warehouse movement ledger"
+    },
+    "/boms/{bomId}": {
+      "schema": { "$ref": "#/entities/Bom" },
+      "description": "BOM headers"
+    },
+    "/boms/{bomId}/items/{itemId}": {
+      "schema": { "$ref": "#/entities/BomItem" },
+      "description": "Component lines belonging to a BOM"
+    },
+    "/uploaded_files/{fileId}": {
+      "schema": { "$ref": "#/entities/UploadedFile" },
+      "description": "Uploaded Excel/CSV master packing list headers"
+    },
+    "/uploaded_files/{fileId}/rows/{rowId}": {
+      "schema": { "$ref": "#/entities/UploadedFileRow" },
+      "description": "Individual lookup rows inside an uploaded packing list"
+    },
+    "/store_groups/{groupId}": {
+      "schema": { "$ref": "#/entities/StoreGroup" },
+      "description": "Admin-defined store file groups"
+    }
+  }
+}

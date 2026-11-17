@@ -1,0 +1,464 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable Global Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isBootstrapAdmin() {
+      return isVerified() && request.auth.token.email == 'leekbmelaka@gmail.com';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        isBootstrapAdmin()
+      );
+    }
+
+    function userDocExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isActiveMember() {
+      return isAdmin() || (
+        isSignedIn() &&
+        userDocExists() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == 1
+      );
+    }
+
+    function isSupervisorOrAdmin() {
+      return isAdmin() || (
+        isActiveMember() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'supervisor'
+      );
+    }
+
+    // Validation Blueprints (Anti-Update-Gap)
+    function isValidBootstrap(data) {
+      return data.keys().hasAll(['initialized', 'adminUid', 'createdAt']) &&
+        data.keys().hasOnly(['initialized', 'adminUid', 'createdAt']) &&
+        data.initialized == true &&
+        isValidId(data.adminUid) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidCompany(data) {
+      return data.keys().hasAll(['id', 'code', 'name', 'qr_profile', 'description']) &&
+        data.keys().hasOnly(['id', 'code', 'name', 'qr_profile', 'description']) &&
+        data.id in [1, 2] &&
+        data.code is string && data.code.size() >= 2 && data.code.size() <= 64 &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
+        data.qr_profile is string && data.qr_profile.size() >= 2 && data.qr_profile.size() <= 64 &&
+        data.description is string && data.description.size() <= 500;
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'username', 'full_name', 'role', 'active', 'created_at', 'serverCreatedAt']) &&
+        data.keys().hasOnly(['uid', 'username', 'full_name', 'role', 'active', 'created_at', 'createdByUid', 'serverCreatedAt']) &&
+        isValidId(data.uid) &&
+        data.username is string && data.username.size() >= 2 && data.username.size() <= 120 &&
+        data.full_name is string && data.full_name.size() >= 1 && data.full_name.size() <= 120 &&
+        data.role in ['admin', 'supervisor', 'operator'] &&
+        data.active in [0, 1] &&
+        data.created_at is string && data.created_at.size() >= 1 && data.created_at.size() <= 64 &&
+        (!('createdByUid' in data) || isValidId(data.createdByUid)) &&
+        data.serverCreatedAt is timestamp;
+    }
+
+    function isValidAdminMarker(data) {
+      return data.keys().hasAll(['uid', 'email', 'grantedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'grantedAt']) &&
+        isValidId(data.uid) &&
+        data.email is string && data.email.size() <= 160 &&
+        data.grantedAt is timestamp;
+    }
+
+    function isValidContainer(data) {
+      return data.keys().hasAll([
+        'id', 'company_id', 'container_code', 'pallet_ref', 'location',
+        'total_boxes', 'total_units', 'received_by', 'completed_at', 'createdByUid', 'serverCreatedAt'
+      ]) &&
+        data.keys().hasOnly([
+          'id', 'company_id', 'container_code', 'pallet_ref', 'location',
+          'total_boxes', 'total_units', 'received_by', 'completed_at', 'createdByUid', 'serverCreatedAt'
+        ]) &&
+        data.id is int && data.id > 0 &&
+        data.company_id in [1, 2] &&
+        data.container_code is string && data.container_code.size() >= 1 && data.container_code.size() <= 120 &&
+        data.pallet_ref is string && data.pallet_ref.size() <= 120 &&
+        data.location is string && data.location.size() >= 1 && data.location.size() <= 120 &&
+        data.total_boxes is int && data.total_boxes > 0 &&
+        data.total_units is int && data.total_units > 0 &&
+        data.received_by is string && data.received_by.size() >= 1 && data.received_by.size() <= 120 &&
+        data.completed_at is string && data.completed_at.size() >= 1 && data.completed_at.size() <= 64 &&
+        isValidId(data.createdByUid) &&
+        data.serverCreatedAt is timestamp;
+    }
+
+    function isValidInventoryLot(data) {
+      return data.keys().hasAll([
+        'id', 'company_id', 'part_number', 'qty', 'initial_qty', 'box_id', 'batch_ref',
+        'location', 'container_id', 'container_code', 'pallet_ref', 'received_at',
+        'createdByUid', 'serverCreatedAt', 'serverUpdatedAt'
+      ]) &&
+        data.keys().hasOnly([
+          'id', 'company_id', 'part_number', 'qty', 'initial_qty', 'box_id', 'batch_ref',
+          'location', 'container_id', 'container_code', 'pallet_ref', 'received_at',
+          'createdByUid', 'serverCreatedAt', 'serverUpdatedAt'
+        ]) &&
+        data.id is int && data.id > 0 &&
+        data.company_id in [1, 2] &&
+        data.part_number is string && data.part_number.size() >= 1 && data.part_number.size() <= 120 &&
+        data.qty is int && data.qty >= 0 &&
+        data.initial_qty is int && data.initial_qty > 0 &&
+        data.qty <= data.initial_qty &&
+        data.box_id is string && data.box_id.size() >= 1 && data.box_id.size() <= 120 &&
+        data.batch_ref is string && data.batch_ref.size() <= 120 &&
+        data.location is string && data.location.size() >= 1 && data.location.size() <= 120 &&
+        data.container_id is int && data.container_id >= 0 &&
+        data.container_code is string && data.container_code.size() <= 120 &&
+        data.pallet_ref is string && data.pallet_ref.size() <= 120 &&
+        data.received_at is string && data.received_at.size() >= 1 && data.received_at.size() <= 64 &&
+        isValidId(data.createdByUid) &&
+        data.serverCreatedAt is timestamp &&
+        data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidMovement(data) {
+      return data.keys().hasAll([
+        'id', 'company_id', 'movement_type', 'part_number', 'qty_delta', 'box_id',
+        'batch_ref', 'from_location', 'to_location', 'reference_code', 'lot_id',
+        'performed_by', 'created_at', 'createdByUid', 'serverCreatedAt'
+      ]) &&
+        data.keys().hasOnly([
+          'id', 'company_id', 'movement_type', 'part_number', 'qty_delta', 'box_id',
+          'batch_ref', 'from_location', 'to_location', 'reference_code', 'lot_id',
+          'performed_by', 'created_at', 'createdByUid', 'serverCreatedAt'
+        ]) &&
+        data.id is int && data.id > 0 &&
+        data.company_id in [1, 2] &&
+        data.movement_type in ['RECEIVE', 'OUTBOUND_FIFO', 'TRANSFER'] &&
+        data.part_number is string && data.part_number.size() >= 1 && data.part_number.size() <= 120 &&
+        data.qty_delta is int &&
+        data.box_id is string && data.box_id.size() <= 120 &&
+        data.batch_ref is string && data.batch_ref.size() <= 120 &&
+        data.from_location is string && data.from_location.size() <= 120 &&
+        data.to_location is string && data.to_location.size() <= 120 &&
+        data.reference_code is string && data.reference_code.size() <= 120 &&
+        data.lot_id is int && data.lot_id >= 0 &&
+        data.performed_by is string && data.performed_by.size() >= 1 && data.performed_by.size() <= 120 &&
+        data.created_at is string && data.created_at.size() >= 1 && data.created_at.size() <= 64 &&
+        isValidId(data.createdByUid) &&
+        data.serverCreatedAt is timestamp;
+    }
+
+    function isValidBom(data) {
+      return data.keys().hasAll([
+        'id', 'company_id', 'parent_part', 'description', 'revision',
+        'created_by', 'updated_at', 'createdByUid', 'serverCreatedAt', 'serverUpdatedAt'
+      ]) &&
+        data.keys().hasOnly([
+          'id', 'company_id', 'parent_part', 'description', 'revision',
+          'created_by', 'updated_at', 'createdByUid', 'serverCreatedAt', 'serverUpdatedAt'
+        ]) &&
+        data.id is int && data.id > 0 &&
+        data.company_id in [1, 2] &&
+        data.parent_part is string && data.parent_part.size() >= 1 && data.parent_part.size() <= 120 &&
+        data.description is string && data.description.size() <= 300 &&
+        data.revision is string && data.revision.size() >= 1 && data.revision.size() <= 32 &&
+        data.created_by is string && data.created_by.size() >= 1 && data.created_by.size() <= 120 &&
+        data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 64 &&
+        isValidId(data.createdByUid) &&
+        data.serverCreatedAt is timestamp &&
+        data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidBomItem(data) {
+      return data.keys().hasAll([
+        'id', 'bom_id', 'company_id', 'component_part', 'qty_per_assembly', 'notes', 'createdByUid'
+      ]) &&
+        data.keys().hasOnly([
+          'id', 'bom_id', 'company_id', 'component_part', 'qty_per_assembly', 'notes', 'createdByUid'
+        ]) &&
+        data.id is int && data.id > 0 &&
+        data.bom_id is int && data.bom_id > 0 &&
+        data.company_id in [1, 2] &&
+        data.component_part is string && data.component_part.size() >= 1 && data.component_part.size() <= 120 &&
+        data.qty_per_assembly is int && data.qty_per_assembly > 0 &&
+        data.notes is string && data.notes.size() <= 250 &&
+        isValidId(data.createdByUid);
+    }
+
+    function isValidUploadedFile(data) {
+      return data.keys().hasAll([
+        'id', 'company_id', 'file_name', 'row_count', 'uploaded_by',
+        'uploaded_at', 'createdByUid', 'serverCreatedAt'
+      ]) &&
+        data.keys().hasOnly([
+          'id', 'company_id', 'file_name', 'row_count', 'uploaded_by',
+          'uploaded_at', 'store_group', 'createdByUid', 'serverCreatedAt'
+        ]) &&
+        data.id is int && data.id > 0 &&
+        data.company_id in [1, 2] &&
+        data.file_name is string && data.file_name.size() >= 1 && data.file_name.size() <= 200 &&
+        data.row_count is int && data.row_count > 0 &&
+        data.uploaded_by is string && data.uploaded_by.size() >= 1 && data.uploaded_by.size() <= 120 &&
+        data.uploaded_at is string && data.uploaded_at.size() >= 1 && data.uploaded_at.size() <= 64 &&
+        (!('store_group' in data) || (data.store_group is string && data.store_group.size() <= 32)) &&
+        isValidId(data.createdByUid) &&
+        data.serverCreatedAt is timestamp;
+    }
+
+    function isValidUploadedFileRow(data) {
+      return data.keys().hasAll([
+        'id', 'file_id', 'company_id', 'lookup_key', 'part_name',
+        'part_number', 'qty', 'batch_ref', 'createdByUid'
+      ]) &&
+        data.keys().hasOnly([
+          'id', 'file_id', 'company_id', 'lookup_key', 'part_name',
+          'part_number', 'qty', 'batch_ref', 'createdByUid'
+        ]) &&
+        data.id is int && data.id > 0 &&
+        data.file_id is int && data.file_id > 0 &&
+        data.company_id in [1, 2] &&
+        data.lookup_key is string && data.lookup_key.size() >= 1 && data.lookup_key.size() <= 160 &&
+        data.part_name is string && data.part_name.size() <= 200 &&
+        data.part_number is string && data.part_number.size() >= 1 && data.part_number.size() <= 120 &&
+        data.qty is int && data.qty > 0 &&
+        data.batch_ref is string && data.batch_ref.size() <= 120 &&
+        isValidId(data.createdByUid);
+    }
+
+    // Connection Probe
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // One-time System Bootstrap Lock
+    match /system/bootstrap {
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() &&
+        !exists(/databases/$(database)/documents/system/bootstrap) &&
+        isValidBootstrap(incoming()) &&
+        incoming().adminUid == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // Companies
+    match /companies/{companyId} {
+      allow get: if isSignedIn() && isValidId(companyId) && isActiveMember();
+      allow list: if isSignedIn() && resource.data.id in [1, 2];
+      allow create: if isSignedIn() && isValidId(companyId) && isActiveMember() && isValidCompany(incoming());
+      allow update, delete: if false;
+    }
+
+    // Admin Markers
+    match /admins/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if false;
+      allow create: if isSignedIn() && isValidId(userId) && isValidAdminMarker(incoming()) &&
+        incoming().uid == userId &&
+        incoming().grantedAt == request.time && (
+          (isOwner(userId) && !exists(/databases/$(database)/documents/system/bootstrap) && existsAfter(/databases/$(database)/documents/system/bootstrap)) ||
+          (isOwner(userId) && isBootstrapAdmin()) ||
+          isAdmin()
+        );
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(userId) && userId != request.auth.uid;
+    }
+
+    // Users (PII-isolated: owner or provisioning admin)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (
+        resource.data.uid == request.auth.uid ||
+        resource.data.createdByUid == request.auth.uid ||
+        (request.auth.token.email_verified == true && request.auth.token.email == 'leekbmelaka@gmail.com')
+      );
+      allow create: if isSignedIn() && isValidId(userId) && isValidUserProfile(incoming()) &&
+        incoming().uid == userId &&
+        'createdByUid' in incoming() &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().serverCreatedAt == request.time && (
+          (isOwner(userId) && !exists(/databases/$(database)/documents/system/bootstrap) && existsAfter(/databases/$(database)/documents/system/bootstrap) && incoming().role == 'admin' && incoming().active == 1) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn() && isValidId(userId) && isValidUserProfile(incoming()) &&
+        isAdmin() &&
+        incoming().uid == existing().uid &&
+        incoming().username == existing().username &&
+        incoming().created_at == existing().created_at &&
+        (!('createdByUid' in existing()) ? !('createdByUid' in incoming()) : incoming().createdByUid == existing().createdByUid) &&
+        incoming().serverCreatedAt == existing().serverCreatedAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['role', 'active', 'full_name']);
+      allow delete: if false;
+    }
+
+    // Containers
+    match /containers/{containerId} {
+      allow get: if isSignedIn() && isValidId(containerId) && isActiveMember();
+      allow list: if isSignedIn() && resource.data.company_id in [1, 2];
+      allow create: if isSignedIn() && isValidId(containerId) && isActiveMember() &&
+        isValidContainer(incoming()) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().serverCreatedAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // Inventory Lots
+    match /inventory_lots/{lotId} {
+      allow get: if isSignedIn() && isValidId(lotId) && isActiveMember();
+      allow list: if isSignedIn() && resource.data.company_id in [1, 2];
+      allow create: if isSignedIn() && isValidId(lotId) && isActiveMember() &&
+        isValidInventoryLot(incoming()) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().serverCreatedAt == request.time &&
+        incoming().serverUpdatedAt == request.time &&
+        (incoming().container_id == 0 || existsAfter(/databases/$(database)/documents/containers/$(string(incoming().container_id))));
+      allow update: if isSignedIn() && isValidId(lotId) && isActiveMember() &&
+        isValidInventoryLot(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().company_id == existing().company_id &&
+        incoming().part_number == existing().part_number &&
+        incoming().initial_qty == existing().initial_qty &&
+        incoming().box_id == existing().box_id &&
+        incoming().container_id == existing().container_id &&
+        incoming().received_at == existing().received_at &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().serverCreatedAt == existing().serverCreatedAt &&
+        incoming().serverUpdatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['qty', 'location', 'serverUpdatedAt']);
+      allow delete: if false;
+    }
+
+    // Movements (Immutable Audit Ledger)
+    match /movements/{movementId} {
+      allow get: if isSignedIn() && isValidId(movementId) && isActiveMember();
+      allow list: if isSignedIn() && resource.data.company_id in [1, 2];
+      allow create: if isSignedIn() && isValidId(movementId) && isActiveMember() &&
+        isValidMovement(incoming()) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().serverCreatedAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // BOMs + Items Subcollection
+    match /boms/{bomId} {
+      allow get: if isSignedIn() && isValidId(bomId) && isActiveMember();
+      allow list: if isSignedIn() && resource.data.company_id in [1, 2];
+      allow create: if isSignedIn() && isValidId(bomId) && isSupervisorOrAdmin() &&
+        isValidBom(incoming()) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().serverCreatedAt == request.time &&
+        incoming().serverUpdatedAt == request.time;
+      allow update: if isSignedIn() && isValidId(bomId) && isSupervisorOrAdmin() &&
+        isValidBom(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().company_id == existing().company_id &&
+        incoming().parent_part == existing().parent_part &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().serverCreatedAt == existing().serverCreatedAt &&
+        incoming().serverUpdatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['description', 'revision', 'created_by', 'updated_at', 'serverUpdatedAt']);
+      allow delete: if isSignedIn() && isValidId(bomId) && isSupervisorOrAdmin();
+
+      match /items/{itemId} {
+        allow get: if isSignedIn() && isValidId(itemId) && isActiveMember() &&
+          exists(/databases/$(database)/documents/boms/$(bomId));
+        allow list: if isSignedIn() && resource.data.company_id in [1, 2];
+        allow create: if isSignedIn() && isValidId(itemId) && isSupervisorOrAdmin() &&
+          isValidBomItem(incoming()) &&
+          incoming().createdByUid == request.auth.uid &&
+          existsAfter(/databases/$(database)/documents/boms/$(bomId));
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(itemId) && isSupervisorOrAdmin();
+      }
+    }
+
+    // Uploaded Files + Rows Subcollection
+    match /uploaded_files/{fileId} {
+      allow get: if isSignedIn() && isValidId(fileId) && isActiveMember();
+      allow list: if isSignedIn() && resource.data.company_id in [1, 2];
+      allow create: if isSignedIn() && isValidId(fileId) && isActiveMember() &&
+        isValidUploadedFile(incoming()) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().serverCreatedAt == request.time;
+      allow update: if isSignedIn() && isValidId(fileId) && isActiveMember() &&
+        isValidUploadedFile(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().company_id == existing().company_id &&
+        incoming().file_name == existing().file_name &&
+        incoming().row_count == existing().row_count &&
+        incoming().uploaded_by == existing().uploaded_by &&
+        incoming().uploaded_at == existing().uploaded_at &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().serverCreatedAt == existing().serverCreatedAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['store_group']);
+      allow delete: if isSignedIn() && isValidId(fileId) && isSupervisorOrAdmin();
+
+      match /rows/{rowId} {
+        allow get: if isSignedIn() && isValidId(rowId) && isActiveMember() &&
+          exists(/databases/$(database)/documents/uploaded_files/$(fileId));
+        allow list: if isSignedIn() && resource.data.company_id in [1, 2];
+        allow create: if isSignedIn() && isValidId(rowId) && isActiveMember() &&
+          isValidUploadedFileRow(incoming()) &&
+          incoming().createdByUid == request.auth.uid &&
+          existsAfter(/databases/$(database)/documents/uploaded_files/$(fileId));
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(rowId) && isSupervisorOrAdmin();
+      }
+    }
+
+    // Store Groups Collection
+    function isValidStoreGroup(data) {
+      return data.keys().hasAll(['id', 'name', 'createdByUid', 'serverCreatedAt']) &&
+        data.keys().hasOnly(['id', 'name', 'createdByUid', 'serverCreatedAt']) &&
+        data.id is string && isValidId(data.id) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 32 &&
+        isValidId(data.createdByUid) &&
+        data.serverCreatedAt is timestamp;
+    }
+
+    match /store_groups/{groupId} {
+      allow get, list: if isSignedIn() && isActiveMember();
+      allow create: if isSignedIn() && isValidId(groupId) && isAdmin() &&
+        incoming().id == groupId &&
+        isValidStoreGroup(incoming()) &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().serverCreatedAt == request.time;
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(groupId) && isAdmin();
+    }
+  }
+}

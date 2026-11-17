@@ -1,0 +1,6 @@
+{
+  "name": "NexusWMS — Multi-Company Warehouse Operations",
+  "description": "Cloud Warehouse Management System with company-separated inventory, Bluetooth HID QR scanning, container receiving, FIFO outbound issuing, stock transfers, BOM management, and role-based access control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
