@@ -245,13 +245,14 @@ service cloud.firestore {
         'part_number', 'qty', 'batch_ref', 'createdByUid'
       ]) &&
         data.keys().hasOnly([
-          'id', 'file_id', 'company_id', 'lookup_key', 'part_name',
+          'id', 'file_id', 'company_id', 'lookup_key', 'case_no', 'part_name',
           'part_number', 'qty', 'batch_ref', 'createdByUid'
         ]) &&
         data.id is int && data.id > 0 &&
         data.file_id is int && data.file_id > 0 &&
         data.company_id in [1, 2] &&
         data.lookup_key is string && data.lookup_key.size() >= 1 && data.lookup_key.size() <= 160 &&
+        (!('case_no' in data) || (data.case_no is string && data.case_no.size() <= 120)) &&
         data.part_name is string && data.part_name.size() <= 200 &&
         data.part_number is string && data.part_number.size() >= 1 && data.part_number.size() <= 120 &&
         data.qty is int && data.qty > 0 &&
@@ -425,7 +426,7 @@ service cloud.firestore {
         incoming().createdByUid == existing().createdByUid &&
         incoming().serverCreatedAt == existing().serverCreatedAt &&
         incoming().diff(existing()).affectedKeys().hasOnly(['store_group']);
-      allow delete: if isSignedIn() && isValidId(fileId) && isSupervisorOrAdmin();
+      allow delete: if isSignedIn() && isValidId(fileId) && isActiveMember();
 
       match /rows/{rowId} {
         allow get: if isSignedIn() && isValidId(rowId) && isActiveMember() &&
@@ -436,7 +437,7 @@ service cloud.firestore {
           incoming().createdByUid == request.auth.uid &&
           existsAfter(/databases/$(database)/documents/uploaded_files/$(fileId));
         allow update: if false;
-        allow delete: if isSignedIn() && isValidId(rowId) && isSupervisorOrAdmin();
+        allow delete: if isSignedIn() && isValidId(rowId) && isActiveMember();
       }
     }
 

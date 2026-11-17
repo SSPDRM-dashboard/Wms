@@ -168,6 +168,7 @@ export const api = {
     store_group?: StoreFileGroup | '';
     rows: Array<{
       lookup_key: string;
+      case_no?: string;
       part_name: string;
       part_number: string;
       qty: number;

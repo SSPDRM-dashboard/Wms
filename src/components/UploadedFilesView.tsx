@@ -37,6 +37,7 @@ interface UploadedFilesViewProps {
 
 interface ParsedUploadRow {
   lookup_key: string;
+  case_no: string;
   part_name: string;
   part_number: string;
   qty: number;
@@ -71,7 +72,7 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
   const [newGroupName, setNewGroupName] = useState('');
   const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
-  const canDelete = user.role === 'admin' || user.role === 'supervisor';
+  const canDelete = Boolean(user);
   const isAdmin = user.role === 'admin';
 
   async function loadFiles() {
@@ -156,41 +157,104 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
 
   function parseMatrixToRows(matrix: unknown[][]): ParsedUploadRow[] {
     const rows: ParsedUploadRow[] = [];
+    if (matrix.length === 0) return rows;
+
+    const firstRow = Array.isArray(matrix[0]) ? matrix[0] : [];
+    const headerCells = firstRow.map((c) => String(c ?? '').trim().toLowerCase());
+    const maxCols = matrix.reduce((max, r) => (Array.isArray(r) ? Math.max(max, r.length) : max), 0);
+
+    const has6ColHeaders =
+      headerCells[0]?.includes('batch') ||
+      headerCells[1]?.includes('case') ||
+      headerCells[2]?.includes('part name') ||
+      headerCells[3]?.includes('part no') ||
+      headerCells[4]?.includes("q'ty") ||
+      headerCells[4]?.includes('qty') ||
+      headerCells[5]?.includes('batch');
+
+    const isSixColumn = maxCols >= 6 || has6ColHeaders;
+
     for (let i = 0; i < matrix.length; i++) {
       const rawRow = matrix[i];
       if (!Array.isArray(rawRow)) continue;
 
-      const lookupKey = String(rawRow[0] ?? '').trim();
-      const partName = String(rawRow[1] ?? '').trim();
-      const partNumber = String(rawRow[2] ?? '').trim();
-      const qtyRaw = String(rawRow[3] ?? '').trim();
-      const qtyNumericStr = qtyRaw.replace(/,/g, '');
-      const batchRef = String(rawRow[4] ?? '').trim();
+      if (isSixColumn) {
+        const lookupKey = String(rawRow[0] ?? '').trim();
+        const caseNo = String(rawRow[1] ?? '').trim();
+        const partName = String(rawRow[2] ?? '').trim();
+        const partNumber = String(rawRow[3] ?? '').trim();
+        const qtyRaw = String(rawRow[4] ?? '').trim();
+        const qtyNumericStr = qtyRaw.replace(/,/g, '');
+        const batchRef = String(rawRow[5] ?? '').trim();
 
-      if (!lookupKey && !partNumber) continue;
+        if (!lookupKey && !partNumber && !caseNo) continue;
 
-      const lookupLower = lookupKey.toLowerCase();
-      const qtyLower = qtyRaw.toLowerCase();
-      const isHeader =
-        i === 0 &&
-        (['lookup', 'lookup criteria', 'pallet', 'pallet id', 'column a', 'a', 'criteria'].includes(
-          lookupLower
-        ) ||
-          ['qty', 'quantity', 'column d'].includes(qtyLower) ||
-          (qtyNumericStr !== '' && !Number.isFinite(Number(qtyNumericStr))));
+        const lookupLower = lookupKey.toLowerCase();
+        const qtyLower = qtyRaw.toLowerCase();
+        const isHeader =
+          i === 0 &&
+          (lookupLower.includes('batch') ||
+            lookupLower.includes('lookup') ||
+            lookupLower.includes('pallet') ||
+            caseNo.toLowerCase().includes('case') ||
+            partName.toLowerCase().includes('part name') ||
+            partNumber.toLowerCase().includes('part no') ||
+            qtyLower.includes('qty') ||
+            qtyLower.includes("q'ty") ||
+            (qtyNumericStr !== '' && !Number.isFinite(Number(qtyNumericStr))));
 
-      if (isHeader) continue;
+        if (isHeader) continue;
 
-      const parsedQty = Math.floor(Number(qtyNumericStr));
-      if (!lookupKey) continue;
+        const parsedQty = Math.floor(Number(qtyNumericStr));
+        const resolvedLookup = lookupKey || (batchRef && caseNo ? `${batchRef}.${caseNo}` : caseNo);
+        if (!resolvedLookup) continue;
 
-      rows.push({
-        lookup_key: lookupKey,
-        part_name: partName || 'Part Item',
-        part_number: partNumber || lookupKey,
-        qty: Number.isInteger(parsedQty) && parsedQty > 0 ? parsedQty : 1,
-        batch_ref: batchRef,
-      });
+        rows.push({
+          lookup_key: resolvedLookup,
+          case_no: caseNo || resolvedLookup,
+          part_name: partName || 'Part Item',
+          part_number: partNumber || resolvedLookup,
+          qty: Number.isInteger(parsedQty) && parsedQty > 0 ? parsedQty : 1,
+          batch_ref: batchRef,
+        });
+      } else {
+        // Legacy 5-column fallback
+        const lookupKey = String(rawRow[0] ?? '').trim();
+        const caseOrName = String(rawRow[1] ?? '').trim();
+        const partNumber = String(rawRow[2] ?? '').trim();
+        const qtyRaw = String(rawRow[3] ?? '').trim();
+        const qtyNumericStr = qtyRaw.replace(/,/g, '');
+        const batchRef = String(rawRow[4] ?? '').trim();
+
+        if (!lookupKey && !partNumber) continue;
+
+        const lookupLower = lookupKey.toLowerCase();
+        const qtyLower = qtyRaw.toLowerCase();
+        const isHeader =
+          i === 0 &&
+          (['lookup', 'lookup criteria', 'pallet', 'pallet id', 'column a', 'a', 'criteria'].includes(
+            lookupLower
+          ) ||
+            ['box', 'box id', 'box number', 'box no', 'case no', 'case no.', 'carton', 'part name', 'column b'].includes(
+              caseOrName.toLowerCase()
+            ) ||
+            ['qty', 'quantity', 'column d'].includes(qtyLower) ||
+            (qtyNumericStr !== '' && !Number.isFinite(Number(qtyNumericStr))));
+
+        if (isHeader) continue;
+
+        const parsedQty = Math.floor(Number(qtyNumericStr));
+        if (!lookupKey) continue;
+
+        rows.push({
+          lookup_key: lookupKey,
+          case_no: caseOrName || `BX-${lookupKey}-${String(rows.length + 1).padStart(2, '0')}`,
+          part_name: caseOrName || 'Part Item',
+          part_number: partNumber || lookupKey,
+          qty: Number.isInteger(parsedQty) && parsedQty > 0 ? parsedQty : 1,
+          batch_ref: batchRef,
+        });
+      }
     }
     return rows;
   }
@@ -217,7 +281,7 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
 
       if (parsedRows.length === 0) {
         throw new Error(
-          'No valid data rows found. Ensure Column A = Lookup/Pallet, Column B = Part Name, Column C = Part Number, Column D = Qty, Column E = Batch/Ref.'
+          "No valid data rows found. Ensure Col A = Batch NO.Case No., Col B = Case No., Col C = Part Name-English, Col D = Part No., Col E = Box Q'ty, Col F = Batch NO."
         );
       }
 
@@ -252,6 +316,7 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
       const sampleRows: ParsedUploadRow[] = [
         {
           lookup_key: 'EC15S6006-401F2703',
+          case_no: 'BX-EC15S-001',
           part_name: 'Bracket Assembly Front',
           part_number: '5306NW610001AC01',
           qty: 10,
@@ -259,6 +324,7 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
         },
         {
           lookup_key: 'EC15S6006-401F2703',
+          case_no: 'BX-EC15S-002',
           part_name: 'Stainless Reinforcement',
           part_number: '5306NW610002AC01',
           qty: 20,
@@ -266,6 +332,7 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
         },
         {
           lookup_key: 'EC15S6006-401F2703',
+          case_no: 'BX-EC15S-003',
           part_name: 'Copper Thermal Bushing',
           part_number: '5306NW610003AC01',
           qty: 30,
@@ -341,11 +408,11 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
   function handleDownloadTemplate() {
     exportRowsToCsv(
       'pallet-packing-list-template.csv',
-      ['Lookup Criteria (Col A)', 'Part Name (Col B)', 'Part Number (Col C)', 'Qty (Col D)', 'Batch / Ref (Col E)'],
+      ['Batch NO.Case No.', 'Case No.', 'Part Name-English', 'Part No.', "Box Q'ty", 'Batch NO.'],
       [
-        ['EC15S6006-401F2703', 'Bracket Assembly Front', '5306NW610001AC01', 10, 'EC15S6006-4'],
-        ['EC15S6006-401F2703', 'Stainless Reinforcement', '5306NW610002AC01', 20, 'EC15S6006-4'],
-        ['EC15S6006-401F2703', 'Copper Thermal Bushing', '5306NW610003AC01', 30, 'EC15S6006-4'],
+        ['EC15S6006-401F2703', 'BX-EC15S-001', 'Bracket Assembly Front', '5306NW610001AC01', 10, 'EC15S6006-4'],
+        ['EC15S6006-401F2703', 'BX-EC15S-002', 'Stainless Reinforcement', '5306NW610002AC01', 20, 'EC15S6006-4'],
+        ['EC15S6006-401F2703', 'BX-EC15S-003', 'Copper Thermal Bushing', '5306NW610003AC01', 30, 'EC15S6006-4'],
       ]
     );
   }
@@ -354,8 +421,8 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
     const baseName = file.file_name.replace(/\.[^/.]+$/, '');
     exportRowsToCsv(
       `${baseName}.csv`,
-      ['Lookup Criteria (Col A)', 'Part Name (Col B)', 'Part Number (Col C)', 'Qty (Col D)', 'Batch / Ref (Col E)'],
-      file.rows.map((r) => [r.lookup_key, r.part_name, r.part_number, r.qty, r.batch_ref || ''])
+      ['Batch NO.Case No.', 'Case No.', 'Part Name-English', 'Part No.', "Box Q'ty", 'Batch NO.'],
+      file.rows.map((r) => [r.lookup_key, r.case_no ?? '', r.part_name, r.part_number, r.qty, r.batch_ref || ''])
     );
   }
 
@@ -381,6 +448,7 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
           f.rows.some(
             (r) =>
               r.lookup_key.toLowerCase().includes(normalizedSearch) ||
+              (r.case_no || '').toLowerCase().includes(normalizedSearch) ||
               r.part_name.toLowerCase().includes(normalizedSearch) ||
               r.part_number.toLowerCase().includes(normalizedSearch) ||
               r.batch_ref.toLowerCase().includes(normalizedSearch)
@@ -457,26 +525,30 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
           </button>
         </div>
 
-        <div className="rounded-lg bg-slate-50 border border-slate-200 p-3.5 text-xs text-slate-700 grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono">
+        <div className="rounded-lg bg-slate-50 border border-slate-200 p-3.5 text-xs text-slate-700 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 font-mono">
           <div>
             <span className="text-slate-500 block font-sans">Column A</span>
-            <span className="font-semibold text-slate-900">Lookup / Pallet Key</span>
+            <span className="font-semibold text-slate-900">Batch NO.Case No.</span>
           </div>
           <div>
             <span className="text-slate-500 block font-sans">Column B</span>
-            <span className="font-semibold text-slate-900">Part Name</span>
+            <span className="font-semibold text-slate-900">Case No. (Box No.)</span>
           </div>
           <div>
             <span className="text-slate-500 block font-sans">Column C</span>
-            <span className="font-semibold text-slate-900">Part Number</span>
+            <span className="font-semibold text-slate-900">Part Name-English</span>
           </div>
           <div>
             <span className="text-slate-500 block font-sans">Column D</span>
-            <span className="font-semibold text-slate-900">Qty (Integer)</span>
+            <span className="font-semibold text-slate-900">Part No.</span>
           </div>
           <div>
             <span className="text-slate-500 block font-sans">Column E</span>
-            <span className="font-semibold text-slate-900">Batch / Ref</span>
+            <span className="font-semibold text-slate-900">Box Q&apos;ty</span>
+          </div>
+          <div>
+            <span className="text-slate-500 block font-sans">Column F</span>
+            <span className="font-semibold text-slate-900">Batch NO.</span>
           </div>
         </div>
 
@@ -610,7 +682,7 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
             />
           </label>
           <span className="text-xs text-slate-500">
-            Multiple rows sharing the same Column A key (e.g. 3 parts on one pallet) will all load when scanned.
+            Multiple rows sharing the same Column A key will all load when scanned by pallet, assigning Box Numbers from Column B.
           </span>
         </div>
 
@@ -832,6 +904,7 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
                           <button
                             type="button"
                             onClick={() => setConfirmDeleteId(file.id)}
+                            title={`Delete ${file.file_name}`}
                             aria-label={`Delete ${file.file_name}`}
                             className="inline-flex items-center justify-center rounded-md p-1.5 text-slate-400 hover:text-red-700 hover:bg-red-50 transition-colors"
                           >
@@ -847,11 +920,12 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
                         <thead>
                           <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs font-medium text-slate-500">
                             <th className="px-5 py-2">#</th>
-                            <th className="px-4 py-2">Col A: Lookup / Pallet Key</th>
-                            <th className="px-4 py-2">Col B: Part Name</th>
-                            <th className="px-4 py-2">Col C: Part Number</th>
-                            <th className="px-4 py-2 text-right">Col D: Qty</th>
-                            <th className="px-5 py-2">Col E: Batch / Ref</th>
+                            <th className="px-4 py-2">Col A: Batch NO.Case No.</th>
+                            <th className="px-4 py-2">Col B: Case No.</th>
+                            <th className="px-4 py-2">Col C: Part Name-English</th>
+                            <th className="px-4 py-2">Col D: Part No.</th>
+                            <th className="px-4 py-2 text-right">Col E: Box Q&apos;ty</th>
+                            <th className="px-5 py-2">Col F: Batch NO.</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 bg-white">
@@ -862,6 +936,9 @@ export function UploadedFilesView({ company, companies, user, onNavigate }: Uplo
                               </td>
                               <td className="px-4 py-2 font-mono font-medium text-slate-900">
                                 {row.lookup_key}
+                              </td>
+                              <td className="px-4 py-2 font-mono text-slate-800">
+                                {row.case_no || '—'}
                               </td>
                               <td className="px-4 py-2 text-slate-700">{row.part_name}</td>
                               <td className="px-4 py-2 font-mono text-slate-900">{row.part_number}</td>

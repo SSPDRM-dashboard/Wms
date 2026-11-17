@@ -24,9 +24,7 @@ import {
   DEFAULT_STORE_FILE_GROUPS,
   formatStoreGroupLabel,
   type Company,
-  type ContainerRecord,
   type NavSection,
-  type ParsedQrResult,
   type PendingScanItem,
   type StoreFileGroup,
   type UploadedFileRecord,
@@ -63,9 +61,7 @@ export function ReceivingView({
   const [muted, setMuted] = useState(false);
   const [parsing, setParsing] = useState(false);
   const [committing, setCommitting] = useState(false);
-  const [lastParse, setLastParse] = useState<ParsedQrResult | null>(null);
   const [feedback, setFeedback] = useState<{ kind: 'success' | 'warning' | 'error'; text: string } | null>(null);
-  const [containers, setContainers] = useState<ContainerRecord[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFileRecord[]>([]);
   const [storeGroups, setStoreGroups] = useState<string[]>([...DEFAULT_STORE_FILE_GROUPS]);
   const [lookupGroup, setLookupGroup] = useState<'all' | StoreFileGroup>('all');
@@ -107,13 +103,11 @@ export function ReceivingView({
     setLocation(company.id === 1 ? 'RCV-DOCK-01' : 'RCV-DOCK-02');
     setContainerCode(`CONT-${company.id === 1 ? 'A' : 'B'}-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-01`);
     setPalletRef('');
-    setLastParse(null);
     setFeedback(null);
     setAwaitingAddressItems([]);
     setAddressScan('');
     setReviewOpen(false);
     setReviewError(null);
-    void loadContainers();
     void loadUploadedFiles();
   }, [company.id]);
 
@@ -140,37 +134,52 @@ export function ReceivingView({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [reviewOpen, committing]);
 
-  async function loadContainers() {
-    try {
-      const res = await api.getContainers(company.id);
-      setContainers(res.containers);
-    } catch {
-      // Non-blocking
+  function resolvePartNameForNumber(partNumber: string): string {
+    const target = partNumber.trim().toLowerCase();
+    if (!target) return '';
+    const scopedFiles =
+      lookupGroup === 'all'
+        ? uploadedFiles
+        : uploadedFiles.filter((f) => (f.store_group || '') === lookupGroup);
+    for (const file of [...scopedFiles, ...uploadedFiles]) {
+      const hit = file.rows.find((r) => (r.part_number || '').trim().toLowerCase() === target);
+      if (hit && hit.part_name?.trim()) {
+        return hit.part_name.trim();
+      }
     }
+    return '';
   }
 
   function stageMasterLookupItems(
     trimmed: string,
     matchedKey: string,
     fileName: string | null,
-    items: Array<{ part_name: string; part_number: string; qty: number; batch_ref: string }>
+    items: Array<{ case_no?: string; part_name: string; part_number: string; qty: number; batch_ref: string }>
   ) {
     const activePalletKey = matchedKey || trimmed;
     setPalletRef(activePalletKey);
 
-    const drafts: Array<Omit<PendingScanItem, 'location'>> = items.map((row, idx) => ({
-      localId: `${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
-      partNumber: row.part_number,
-      qty: row.qty,
-      boxId:
-        items.length > 1
+    const drafts: Array<Omit<PendingScanItem, 'location'>> = items.map((row, idx) => {
+      // User requirement: For scan by pallet use Column B (Case No.) of uploaded for box number
+      const colBBoxId = (row.case_no !== undefined ? row.case_no : row.part_name || '').trim();
+      const resolvedBoxId =
+        colBBoxId ||
+        (items.length > 1
           ? `${activePalletKey}-${String(idx + 1).padStart(2, '0')}`
-          : activePalletKey,
-      batchRef: row.batch_ref || '',
-      palletRef: activePalletKey,
-      rawScan: trimmed,
-      scannedAt: new Date().toISOString(),
-    }));
+          : activePalletKey);
+
+      return {
+        localId: `${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
+        partNumber: row.part_number,
+        partName: (row.part_name || '').trim() || resolvePartNameForNumber(row.part_number),
+        qty: row.qty,
+        boxId: resolvedBoxId,
+        batchRef: row.batch_ref || '',
+        palletRef: activePalletKey,
+        rawScan: trimmed,
+        scannedAt: new Date().toISOString(),
+      };
+    });
 
     const duplicate = drafts.find((draft) => {
       const is60Batch = String(draft.batchRef || '').toLowerCase().includes('60');
@@ -182,7 +191,7 @@ export function ReceivingView({
       playScanFeedback('error', muted);
       setFeedback({
         kind: 'error',
-        text: `Duplicate pallet/box scan blocked: "${duplicate.boxId}" is already staged in Pending Container Scans.`,
+        text: `Duplicate box scan blocked: Box ID "${duplicate.boxId}" is already staged in Pending Container Scans.`,
       });
       setRawScan('');
       return;
@@ -215,7 +224,7 @@ export function ReceivingView({
       kind: 'success',
       text: `Loaded Pallet "${activePalletKey}" from "${fileName || 'Uploaded File'}": ${
         newItems.length
-      } item(s) (${totalUnits.toLocaleString()} units) added to Pending Container Scans @ ${targetLoc}.`,
+      } item(s) (${totalUnits.toLocaleString()} units) staged with Box Numbers from Column B @ ${targetLoc}.`,
     });
     setRawScan('');
   }
@@ -230,7 +239,6 @@ export function ReceivingView({
       if (scanMode === 'pallet') {
         const activeGroup = lookupGroup === 'all' ? '' : lookupGroup;
         const lookupRes = await api.lookupUploadedReceiving(company.id, trimmed, activeGroup);
-        setLastParse(null);
 
         if (!lookupRes.matched || lookupRes.items.length === 0) {
           playScanFeedback('error', muted);
@@ -255,7 +263,6 @@ export function ReceivingView({
 
       // Scan by Box mode
       const result = await api.parseScan(company.id, trimmed);
-      setLastParse(result);
 
       if (!result.valid) {
         // Fallback: check Uploaded File repository if the scanned code matches a stored Col A key
@@ -292,6 +299,7 @@ export function ReceivingView({
         const drafts: Array<Omit<PendingScanItem, 'location'>> = result.items.map((it, idx) => ({
           localId: `${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
           partNumber: it.partNumber,
+          partName: resolvePartNameForNumber(it.partNumber),
           qty: it.qty,
           boxId: it.boxId,
           batchRef: it.batchRef || '',
@@ -344,6 +352,7 @@ export function ReceivingView({
       const stagedDraft: Omit<PendingScanItem, 'location'> = {
         localId: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         partNumber: result.partNumber!,
+        partName: resolvePartNameForNumber(result.partNumber!),
         qty: result.qty!,
         boxId: result.boxId!,
         batchRef: result.batchRef || '',
@@ -475,7 +484,6 @@ export function ReceivingView({
         kind: 'success',
         text: `Container ${res.containerCode} stored in system: ${res.totalBoxes} boxes (${res.totalUnits} units) committed to ${res.location}.`,
       });
-      await loadContainers();
     } catch (err) {
       playScanFeedback('error', muted);
       const msg = err instanceof Error ? err.message : 'Failed to store container.';
@@ -489,9 +497,18 @@ export function ReceivingView({
   const totalPendingUnits = pendingScans.reduce((sum, item) => sum + item.qty, 0);
 
   const groupedBySku = Object.values(
-    pendingScans.reduce<Record<string, { partNumber: string; boxes: number; totalQty: number }>>((acc, item) => {
+    pendingScans.reduce<
+      Record<string, { partNumber: string; partName: string; boxes: number; totalQty: number }>
+    >((acc, item) => {
       if (!acc[item.partNumber]) {
-        acc[item.partNumber] = { partNumber: item.partNumber, boxes: 0, totalQty: 0 };
+        acc[item.partNumber] = {
+          partNumber: item.partNumber,
+          partName: item.partName || resolvePartNameForNumber(item.partNumber),
+          boxes: 0,
+          totalQty: 0,
+        };
+      } else if (!acc[item.partNumber].partName && item.partName) {
+        acc[item.partNumber].partName = item.partName;
       }
       acc[item.partNumber].boxes += 1;
       acc[item.partNumber].totalQty += item.qty;
@@ -570,9 +587,8 @@ export function ReceivingView({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-7 space-y-6">
-          {/* Uploaded File Reference Bar */}
+      <div className="space-y-6">
+        {/* Uploaded File Reference Bar */}
           <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-start gap-3 min-w-0">
@@ -804,7 +820,7 @@ export function ReceivingView({
                     isAwaitingAddress
                       ? 'Complete Step 2 address scan below before scanning next item...'
                       : scanMode === 'pallet'
-                      ? 'Scan pallet barcode matching Col A in Uploaded File (e.g. BUFAJIAN7003/BANII/EC15S6006-401F2703)'
+                      ? 'Scan pallet barcode matching Col A (or Col B Box No) in Uploaded File'
                       : company.id === 1
                       ? `Scan ${company.code} QR (e.g. CA_PN-4402-AL_STD_120_BOX-A401_LOT-2611A)`
                       : `Scan ${company.code} Pallet or Box QR (e.g. BOX/BR-9081-TI&60/BATCH-26B9/BX-3012)`
@@ -931,158 +947,86 @@ export function ReceivingView({
             )}
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-            <h2 className="text-base font-semibold text-slate-900">
-              Active QR Profile: {company.code}
-            </h2>
-            <p className="text-xs leading-relaxed text-slate-600">{company.description}</p>
-            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs font-mono text-slate-700 space-y-1.5">
-              {company.id === 1 ? (
-                <>
-                  <div>Delimiter: <span className="font-semibold text-slate-900">_ (underscore)</span></div>
-                  <div>Seg 2 → Part Number</div>
-                  <div>Seg 4 → Quantity (integer)</div>
-                  <div>Seg 5 → Box ID</div>
-                  <div>Seg 6 → Batch / Reference (optional)</div>
-                </>
-              ) : (
-                <>
-                  <div>Delimiter: <span className="font-semibold text-slate-900">/ (slash)</span></div>
-                  <div>Pallet QR (<span className="text-slate-900">PLT/...</span>) → Reference only (no stock)</div>
-                  <div>Box Seg 2 → <span className="text-slate-900">Part&amp;Qty</span> (split by &amp;)</div>
-                  <div>Box Seg 3 → Batch · Seg 4 → Box ID</div>
-                </>
-              )}
+        {/* Pending Container Scans (Below Scan) */}
+        <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">
+                Pending Container Scans ({pendingScans.length} boxes ·{' '}
+                <span className="font-mono tabular-nums">{totalPendingUnits.toLocaleString()}</span> units)
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Staged in browser memory — do not reload before completing container.
+              </p>
             </div>
-          </div>
-
-          {lastParse && (
-            <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-base font-semibold text-slate-900">Raw Scanner Segment Inspector</h2>
-                <span className="font-mono text-xs text-slate-500">{lastParse.profile}</span>
-              </div>
-              <div className="rounded-lg bg-slate-900 text-slate-100 p-3 font-mono text-xs break-all">
-                {lastParse.rawInput}
-              </div>
-              {lastParse.strippedAimPrefix && (
-                <div className="text-xs text-slate-600">
-                  Stripped AIM scanner prefix: <span className="font-mono font-semibold">{lastParse.strippedAimPrefix}</span>
-                </div>
-              )}
-              <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden">
-                {lastParse.segments.map((seg, idx) => (
-                  <div key={idx} className="px-3 py-2 flex items-center justify-between gap-3 text-xs bg-white">
-                    <span className="text-slate-500 font-mono">Segment {idx + 1}</span>
-                    <span className="font-mono font-medium text-slate-900 truncate">{seg || '(empty)'}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200">
-              <h2 className="text-base font-semibold text-slate-900">Recent Completed Containers</h2>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {containers.length === 0 ? (
-                <div className="px-5 py-6 text-sm text-slate-500 text-center">No containers completed yet.</div>
-              ) : (
-                containers.slice(0, 6).map((c) => (
-                  <div key={c.id} className="px-5 py-3 flex items-center justify-between gap-4">
-                    <div>
-                      <div className="font-mono text-sm font-semibold text-slate-900">{c.container_code}</div>
-                      <div className="text-xs text-slate-500">
-                        {c.location} · by {c.received_by}
-                        {c.pallet_ref ? ` · ${c.pallet_ref}` : ''}
-                      </div>
-                    </div>
-                    <div className="text-right font-mono tabular-nums">
-                      <div className="text-sm font-semibold text-slate-900">{c.total_units.toLocaleString()} units</div>
-                      <div className="text-xs text-slate-500">{c.total_boxes} boxes</div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="lg:col-span-5 space-y-6">
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden sticky top-6">
-            <div className="px-5 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <h2 className="text-base font-semibold text-slate-900">
-                  Pending Container Scans ({pendingScans.length} boxes ·{' '}
-                  <span className="font-mono tabular-nums">{totalPendingUnits.toLocaleString()}</span> units)
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Staged in browser memory — do not reload before completing container.
-                </p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {pendingScans.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onPendingScansChange([]);
-                      focusActiveScanner();
-                    }}
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap"
-                  >
-                    Clear Staged
-                  </button>
-                )}
+            <div className="flex items-center gap-2 shrink-0">
+              {pendingScans.length > 0 && (
                 <button
                   type="button"
-                  disabled={pendingScans.length === 0 || committing}
                   onClick={() => {
-                    setReviewError(null);
-                    setReviewOpen(true);
+                    onPendingScansChange([]);
+                    focusActiveScanner();
                   }}
-                  className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-50 transition-colors whitespace-nowrap"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap"
                 >
-                  <ClipboardCheck className="w-4 h-4" />
-                  <span>Finish Scan &amp; Review</span>
+                  Clear Staged
                 </button>
-              </div>
+              )}
+              <button
+                type="button"
+                disabled={pendingScans.length === 0 || committing}
+                onClick={() => {
+                  setReviewError(null);
+                  setReviewOpen(true);
+                }}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-50 transition-colors whitespace-nowrap"
+              >
+                <ClipboardCheck className="w-4 h-4" />
+                <span>Finish Scan &amp; Review</span>
+              </button>
             </div>
+          </div>
 
-            <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-slate-50 z-10 shadow-xs">
-                  <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500">
-                    <th className="px-4 py-2.5">Box ID</th>
-                    <th className="px-3 py-2.5">Part Number</th>
-                    <th className="px-3 py-2.5 text-right">Qty</th>
-                    <th className="px-3 py-2.5">Bin</th>
-                    <th className="px-3 py-2.5 text-right">Action</th>
+          <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-slate-50 z-10 shadow-xs">
+                <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500">
+                  <th className="px-4 py-2.5">Box ID</th>
+                  <th className="px-4 py-2.5">Part Number</th>
+                  <th className="px-4 py-2.5">Part Name</th>
+                  <th className="px-4 py-2.5 text-right">Qty</th>
+                  <th className="px-4 py-2.5">Bin</th>
+                  <th className="px-4 py-2.5 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {pendingScans.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">
+                      Scanner ready. Scan a box QR code or use a sample test button above to stage items.
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {pendingScans.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="px-5 py-10 text-center text-sm text-slate-500">
-                        Scanner ready. Scan a box QR code or use a sample test button above to stage items.
-                      </td>
-                    </tr>
-                  ) : (
-                    pendingScans.map((item) => (
+                ) : (
+                  pendingScans.map((item) => {
+                    const partName = item.partName || resolvePartNameForNumber(item.partNumber);
+                    return (
                       <tr key={item.localId} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="px-4 py-3 font-mono font-medium text-slate-900 truncate max-w-[120px]" title={item.boxId}>
+                        <td className="px-4 py-3 font-mono font-medium text-slate-900 whitespace-nowrap" title={item.boxId}>
                           {item.boxId}
                         </td>
-                        <td className="px-3 py-3 font-mono text-slate-900 truncate max-w-[110px]" title={item.partNumber}>
+                        <td className="px-4 py-3 font-mono text-slate-900 whitespace-nowrap" title={item.partNumber}>
                           {item.partNumber}
                         </td>
-                        <td className="px-3 py-3 text-right font-mono tabular-nums font-semibold text-slate-900">
+                        <td className="px-4 py-3 text-slate-700 max-w-[320px] truncate" title={partName || undefined}>
+                          {partName || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
                           {item.qty}
                         </td>
-                        <td className="px-3 py-3 font-mono text-xs font-medium text-slate-800 truncate max-w-[90px]" title={item.location || location}>
+                        <td className="px-4 py-3 font-mono text-xs font-medium text-slate-800 whitespace-nowrap" title={item.location || location}>
                           {item.location || location}
                         </td>
-                        <td className="px-3 py-3 text-right">
+                        <td className="px-4 py-3 text-right">
                           <button
                             type="button"
                             onClick={() => {
@@ -1096,11 +1040,11 @@ export function ReceivingView({
                           </button>
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -1214,6 +1158,7 @@ export function ReceivingView({
                   <thead>
                     <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500">
                       <th className="px-4 py-2">Part Number</th>
+                      <th className="px-4 py-2">Part Name</th>
                       <th className="px-4 py-2 text-right">Boxes</th>
                       <th className="px-4 py-2 text-right">Total Units</th>
                     </tr>
@@ -1222,6 +1167,7 @@ export function ReceivingView({
                     {groupedBySku.map((g) => (
                       <tr key={g.partNumber}>
                         <td className="px-4 py-2.5 font-mono font-semibold text-slate-900">{g.partNumber}</td>
+                        <td className="px-4 py-2.5 text-slate-700">{g.partName || '—'}</td>
                         <td className="px-4 py-2.5 text-right font-mono tabular-nums text-slate-700">{g.boxes}</td>
                         <td className="px-4 py-2.5 text-right font-mono tabular-nums font-semibold text-slate-900">
                           {g.totalQty.toLocaleString()}
@@ -1246,6 +1192,7 @@ export function ReceivingView({
                         <th className="px-4 py-2">#</th>
                         <th className="px-4 py-2">Box ID</th>
                         <th className="px-4 py-2">Part Number</th>
+                        <th className="px-4 py-2">Part Name</th>
                         <th className="px-4 py-2 text-right">Qty</th>
                         <th className="px-4 py-2">Address / Bin</th>
                         <th className="px-4 py-2">Batch / Ref</th>
@@ -1255,45 +1202,51 @@ export function ReceivingView({
                     <tbody className="divide-y divide-slate-100">
                       {pendingScans.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="px-4 py-6 text-center text-sm text-slate-500">
+                          <td colSpan={8} className="px-4 py-6 text-center text-sm text-slate-500">
                             All staged boxes were removed. Go back to scan boxes.
                           </td>
                         </tr>
                       ) : (
-                        pendingScans.map((item, idx) => (
-                          <tr key={item.localId} className="hover:bg-slate-50/70">
-                            <td className="px-4 py-2.5 font-mono tabular-nums text-xs text-slate-500">
-                              {idx + 1}
-                            </td>
-                            <td className="px-4 py-2.5 font-mono font-medium text-slate-900">{item.boxId}</td>
-                            <td className="px-4 py-2.5 font-mono text-slate-800">{item.partNumber}</td>
-                            <td className="px-4 py-2.5 text-right font-mono tabular-nums font-semibold text-slate-900">
-                              {item.qty}
-                            </td>
-                            <td className="px-4 py-2.5 font-mono text-xs font-medium text-slate-800">
-                              {item.location || location}
-                            </td>
-                            <td className="px-4 py-2.5 font-mono text-xs text-slate-600">
-                              {item.batchRef || '—'}
-                              {item.palletRef ? ` · ${item.palletRef}` : ''}
-                            </td>
-                            <td className="px-4 py-2.5 text-right">
-                              <button
-                                type="button"
-                                disabled={committing}
-                                onClick={() =>
-                                  onPendingScansChange((prev) =>
-                                    prev.filter((p) => p.localId !== item.localId)
-                                  )
-                                }
-                                aria-label={`Remove box ${item.boxId}`}
-                                className="inline-flex items-center justify-center rounded-md p-1 text-slate-400 hover:text-red-700 hover:bg-red-50 transition-colors"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </td>
-                          </tr>
-                        ))
+                        pendingScans.map((item, idx) => {
+                          const partName = item.partName || resolvePartNameForNumber(item.partNumber);
+                          return (
+                            <tr key={item.localId} className="hover:bg-slate-50/70">
+                              <td className="px-4 py-2.5 font-mono tabular-nums text-xs text-slate-500">
+                                {idx + 1}
+                              </td>
+                              <td className="px-4 py-2.5 font-mono font-medium text-slate-900">{item.boxId}</td>
+                              <td className="px-4 py-2.5 font-mono text-slate-800">{item.partNumber}</td>
+                              <td className="px-4 py-2.5 text-slate-700 max-w-[200px] truncate" title={partName || undefined}>
+                                {partName || '—'}
+                              </td>
+                              <td className="px-4 py-2.5 text-right font-mono tabular-nums font-semibold text-slate-900">
+                                {item.qty}
+                              </td>
+                              <td className="px-4 py-2.5 font-mono text-xs font-medium text-slate-800">
+                                {item.location || location}
+                              </td>
+                              <td className="px-4 py-2.5 font-mono text-xs text-slate-600">
+                                {item.batchRef || '—'}
+                                {item.palletRef ? ` · ${item.palletRef}` : ''}
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                <button
+                                  type="button"
+                                  disabled={committing}
+                                  onClick={() =>
+                                    onPendingScansChange((prev) =>
+                                      prev.filter((p) => p.localId !== item.localId)
+                                    )
+                                  }
+                                  aria-label={`Remove box ${item.boxId}`}
+                                  className="inline-flex items-center justify-center rounded-md p-1 text-slate-400 hover:text-red-700 hover:bg-red-50 transition-colors"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>

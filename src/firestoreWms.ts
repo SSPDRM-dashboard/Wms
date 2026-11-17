@@ -1521,6 +1521,7 @@ export async function uploadMasterFile(payload: {
   store_group?: StoreFileGroup | '';
   rows: Array<{
     lookup_key: string;
+    case_no?: string;
     part_name: string;
     part_number: string;
     qty: number;
@@ -1545,6 +1546,7 @@ export async function uploadMasterFile(payload: {
 
   const normalizedRows: UploadedFileRow[] = rawRows.map((r, idx) => {
     const lookupKey = clampStr(r.lookup_key, 160);
+    const caseNo = clampStr(r.case_no ?? '', 120);
     const partName = clampStr(r.part_name, 200) || 'Part Item';
     const partNumber = clampStr(r.part_number, 120) || lookupKey;
     const qty = Math.floor(Number(r.qty));
@@ -1552,7 +1554,7 @@ export async function uploadMasterFile(payload: {
 
     if (!lookupKey || !partNumber || !Number.isInteger(qty) || qty <= 0) {
       throw new Error(
-        `Invalid row ${idx + 1}: Column A (Lookup Criteria), Column C (Part Number), and positive integer Column D (Qty) are required.`
+        `Invalid row ${idx + 1}: Column A (Batch NO.Case No.), Column D (Part No.), and positive integer Column E (Box Q'ty) are required.`
       );
     }
 
@@ -1561,6 +1563,7 @@ export async function uploadMasterFile(payload: {
       file_id: fileId,
       company_id: companyId,
       lookup_key: lookupKey,
+      case_no: caseNo,
       part_name: partName,
       part_number: partNumber,
       qty,
@@ -1730,24 +1733,54 @@ export async function lookupUploadedReceiving(
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean);
 
-  // Match priority: 1) exact full scan, 2) exact segment match, 3) longest substring match
+  const getRowBoxNo = (r: UploadedFileRow): string =>
+    (r.case_no !== undefined ? r.case_no : r.part_name || '').trim();
+
+  // Match priority:
+  // 1) exact match on Col A (Batch NO.Case No.)
+  // 2) exact match on Col B (Case No. / Box Number)
+  // 3) segment match on Col A or Col B
+  // 4) substring match on Col A or Col B
+  let matchedBy: 'lookup_key' | 'case_no' = 'lookup_key';
   let matchedRow = flatRows.find((r) => r.lookup_key.trim().toUpperCase() === cleanedUpper);
+
+  if (!matchedRow) {
+    matchedRow = flatRows.find((r) => getRowBoxNo(r).toUpperCase() === cleanedUpper);
+    if (matchedRow) matchedBy = 'case_no';
+  }
 
   if (!matchedRow) {
     for (const seg of segmentsUpper) {
       matchedRow = flatRows.find((r) => r.lookup_key.trim().toUpperCase() === seg);
-      if (matchedRow) break;
+      if (matchedRow) {
+        matchedBy = 'lookup_key';
+        break;
+      }
+      matchedRow = flatRows.find((r) => getRowBoxNo(r).toUpperCase() === seg);
+      if (matchedRow) {
+        matchedBy = 'case_no';
+        break;
+      }
     }
   }
 
   if (!matchedRow) {
     const substringMatches = flatRows
       .filter((r) => {
-        const key = r.lookup_key.trim().toUpperCase();
-        return key.length > 0 && cleanedUpper.includes(key);
+        const keyA = r.lookup_key.trim().toUpperCase();
+        const keyB = getRowBoxNo(r).toUpperCase();
+        return (keyA.length > 0 && cleanedUpper.includes(keyA)) || (keyB.length > 0 && cleanedUpper.includes(keyB));
       })
-      .sort((a, b) => b.lookup_key.length - a.lookup_key.length || b.file_id - a.file_id);
+      .sort((a, b) => {
+        const maxLenB = Math.max((b.lookup_key || '').length, getRowBoxNo(b).length);
+        const maxLenA = Math.max((a.lookup_key || '').length, getRowBoxNo(a).length);
+        return maxLenB - maxLenA || b.file_id - a.file_id;
+      });
     matchedRow = substringMatches[0];
+    if (matchedRow) {
+      const keyA = matchedRow.lookup_key.trim().toUpperCase();
+      matchedBy = keyA.length > 0 && cleanedUpper.includes(keyA) ? 'lookup_key' : 'case_no';
+    }
   }
 
   if (!matchedRow) {
@@ -1755,14 +1788,26 @@ export async function lookupUploadedReceiving(
   }
 
   const targetKeyUpper = matchedRow.lookup_key.trim().toUpperCase();
+  const targetBoxUpper = getRowBoxNo(matchedRow).toUpperCase();
   const targetFileId = matchedRow.file_id;
   const matchedItems: UploadedFileRow[] = flatRows
-    .filter((r) => r.file_id === targetFileId && r.lookup_key.trim().toUpperCase() === targetKeyUpper)
+    .filter((r) => {
+      if (r.file_id !== targetFileId) return false;
+      if (matchedBy === 'case_no' && targetBoxUpper) {
+        return getRowBoxNo(r).toUpperCase() === targetBoxUpper;
+      }
+      if (targetKeyUpper && r.lookup_key.trim().toUpperCase() === targetKeyUpper) return true;
+      if (!targetKeyUpper && targetBoxUpper && getRowBoxNo(r).toUpperCase() === targetBoxUpper) return true;
+      return false;
+    })
     .map(({ file_name: _fn, store_group: _sg, ...row }) => row);
 
   return {
     matched: true,
-    matchedKey: matchedRow.lookup_key.trim(),
+    matchedKey:
+      matchedBy === 'case_no'
+        ? targetKeyUpper ? matchedRow.lookup_key.trim() : getRowBoxNo(matchedRow)
+        : matchedRow.lookup_key.trim() || getRowBoxNo(matchedRow),
     fileName: matchedRow.file_name,
     storeGroup: matchedRow.store_group,
     items: matchedItems,

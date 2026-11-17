@@ -40,6 +40,7 @@ export interface ParsedQrResult {
 export interface PendingScanItem {
   localId: string;
   partNumber: string;
+  partName?: string;
   qty: number;
   boxId: string;
   batchRef: string;
@@ -214,6 +215,7 @@ export interface UploadedFileRow {
   file_id: number;
   company_id: number;
   lookup_key: string;
+  case_no?: string;
   part_name: string;
   part_number: string;
   qty: number;
