@@ -718,7 +718,7 @@ export function ReceivingView({
                   }}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap disabled:opacity-50 ${
                     scanMode === 'box'
-                      ? 'bg-white text-slate-900 shadow-xs'
+                      ? 'bg-blue-700 text-white shadow-xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -760,7 +760,7 @@ export function ReceivingView({
                   }}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap ${
                     addressMode === 'container'
-                      ? 'bg-white text-slate-900 shadow-xs'
+                      ? 'bg-blue-700 text-white shadow-xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -780,7 +780,7 @@ export function ReceivingView({
                   }}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap ${
                     addressMode === 'scan_after_box'
-                      ? 'bg-white text-slate-900 shadow-xs'
+                      ? 'bg-blue-700 text-white shadow-xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
